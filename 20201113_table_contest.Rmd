@@ -35,13 +35,7 @@ knitr::opts_chunk$set(warning = FALSE,
 
 # Description
 
-The table lists three different eKey figures:
-
- * Number of patents registered in the patent office of the country
-
- * Amount of venture capital in 1000 USD
-
- * New business registrations per 1,000 people
+With my table I want to show three factors per EU country. The number of patents filed, the amount of venture capital available and the number of start-ups per 100,000 inhabitants. All factors are additionally shown with a sparkline for the period 2010 to 2018. 
 
 The key figures do not reflect a general understanding of how the countries are positioned technologically or founder-friendly, but only an extract of it.
 
@@ -200,7 +194,6 @@ europe_mean <- all_data %>%
 
 ## Ranking of the final year
 tbl_data <- all_data %>% 
-    tibble::add_row(europe_mean, .before = 1) %>% 
   dplyr::arrange(-patents_2018) %>% 
   dplyr::mutate(rank_pat = dplyr::row_number()) %>% 
   dplyr::arrange(-venture_capital_2018) %>% 
@@ -209,7 +202,9 @@ tbl_data <- all_data %>%
   dplyr::mutate(rank_nbd = dplyr::row_number()) %>% 
   dplyr::mutate(allover_rank = (rank_pat + rank_vc + rank_nbd) / 3) %>% 
   dplyr::arrange(allover_rank) %>% 
-  dplyr::mutate(allover_rank = dplyr::row_number())
+  dplyr::mutate(allover_rank = dplyr::row_number()) %>% 
+  tibble::add_row(europe_mean, .before = 4)
+
 
 ## Rounding of first/ final year, creating sparklines and including flags
 tbl_data <- tbl_data %>% 
