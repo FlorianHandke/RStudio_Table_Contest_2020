@@ -1,0 +1,337 @@
+---
+title: RStudio Table Contest
+author: Florian Handke
+date: '2020-11-01'
+slug: []
+categories: []
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: darkly
+    code_folding: hide
+tags:
+  - '2018'
+  - Tables
+subtitle: ''
+summary: ''
+authors: []
+lastmod: '2018-11-01T10:27:19+01:00'
+featured: no
+image:
+  caption: ''
+  focal_point: ''
+  preview_only: no
+projects: []
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, include = FALSE}
+
+knitr::opts_chunk$set(warning = FALSE,
+                      message = FALSE)
+```
+
+# Description
+
+The table lists three different eKey figures:
+
+ * Number of patents registered in the patent office of the country
+
+ * Amount of venture capital in 1000 USD
+
+ * New business registrations per 1,000 people
+
+The key figures do not reflect a general understanding of how the countries are positioned technologically or founder-friendly, but only an extract of it.
+
+Due to the different data basis, I have chosen the period from 2010 to 2018 for all indicators.
+
+The top 10 per key figure are additionally marked with a rank. The overall rank is the result of the equal weighting of all parameters. The calculated EU28 value is the average of all values.
+
+The **[kableExtra](https://cran.r-project.org/web/packages/kableExtra/vignettes/awesome_table_in_html.html)** package was used to create the table.
+
+For the sparklines in the table I used the **[sparkline](https://cran.r-project.org/web/packages/sparkline/index.html)** package.
+
+# Origin of the data
+
+All data is freely accessible and reflects the current status. The data on patents are provided by **WIPO** (World Intellectual Property Organization), the data on new businesses by the **World Bank** and the data on venture capital by the **OECD** (Organisation for Economic Co-operation and Development)
+
+# Table and Code
+
+```{r}
+
+#####################
+## Importing the data
+#####################
+
+## New business density
+## https://data.worldbank.org/indicator/IC.BUS.NDNS.ZS
+df_nbd <- readxl::read_excel(file.path(here::here(),"venture_capital.xls"), 
+                             skip = 3)
+## Venture capital invests
+## https://stats.oecd.org/Index.aspx?DataSetCode=VC_INVEST
+df_vci <- readxl::read_excel(file.path(here::here(),"new_business.xlsx"))
+
+## Total patent applications (direct and PCT national phase entries)
+## https://www3.wipo.int/ipstats/IpsStatsResultvalue
+df_patents <- readxl::read_excel(file.path(here::here(),"patents.xlsx"))
+
+#####################
+## Loading the relevant packages
+#####################
+
+library(zoo)
+library(kableExtra)
+library(sparkline)
+library(tidyverse)
+
+#####################
+## Tidying the data
+#####################
+
+## New Business development data
+df_nbd_pro <- df_nbd %>% 
+  tibble::as_tibble() %>% 
+  janitor::clean_names() %>% 
+  dplyr::select_at(vars(c(1, paste0("x", as.character(2010:2018))))) %>% 
+  dplyr::rename_at(vars(dplyr::starts_with("x")), ~ paste0("n", .x)) %>% 
+  dplyr::rename(nbd_country = country_name) %>% 
+  dplyr::mutate(iso3c = countrycode::countrycode(nbd_country, origin = 'country.name', destination = 'iso3c'),
+                new_busi_2010 = nx2010,
+                new_busi_2018 = nx2018) %>% 
+  dplyr::arrange(desc(nx2018)) %>% 
+  tidyr::nest(new_business_data = c(paste0("nx", as.character(2010:2018))))
+
+## Venture capital data
+df_vci_pro <- df_vci %>% 
+  tibble::as_tibble() %>%
+  dplyr::rename_at(vars(3), ~ "stages_sub") %>% 
+  janitor::clean_names() %>%
+  dplyr::select_at(vars(c(1:3, paste0("x", as.character(2010:2018))))) %>% 
+  dplyr::rename_at(vars(dplyr::starts_with("x")), ~ paste0("v", .x)) %>% 
+  dplyr::filter(is.character(stages) & is.na(stages_sub)) %>% 
+  dplyr::select(-c(stages, stages_sub)) %>% 
+  dplyr::rename(vci_country = country) %>% 
+  dplyr::mutate_at(vars(paste0("vx", as.character(2010:2018))), as.numeric) %>% 
+  dplyr::mutate(iso3c = countrycode::countrycode(vci_country, 
+                                                 origin = 'country.name', 
+                                                 destination = 'iso3c'),
+                venture_capital_2010 = vx2010,
+                venture_capital_2018 = vx2018) %>% 
+  dplyr::arrange(dplyr::desc(vx2018)) %>% 
+  tidyr::nest(vci_data = c(paste0("vx", as.character(2010:2018)))) 
+
+## Patent data
+df_patents_pro <- df_patents %>% 
+  tibble::as_tibble() %>% 
+  janitor::clean_names() %>%
+  dplyr::select_at(vars(c(1, paste0("x", as.character(2010:2018))))) %>% 
+  dplyr::rename_at(vars(dplyr::starts_with("x")), ~ paste0("p", .x)) %>% 
+  dplyr::rename(patent_office = office) %>% 
+  dplyr::group_by(patent_office) %>% 
+  dplyr::summarise_at(vars(paste0("px", as.character(2010:2018))), sum, na.rm = TRUE) %>% 
+  dplyr::ungroup() %>% 
+  dplyr::filter(patent_office != "Soviet Union") %>% 
+  dplyr::mutate(iso3c = countrycode::countrycode(patent_office, 
+                                                 origin = 'country.name', 
+                                                 destination = 'iso3c'),
+                patents_2010 = px2010,
+                patents_2018 = px2018) %>% 
+  dplyr::arrange(desc(px2018)) %>% 
+  tidyr::nest(patent_data = c(paste0("px", as.character(2010:2018)))) 
+
+## Bringing the data together
+all_data <- countrycode::codelist %>% 
+  dplyr::filter(!is.na(eu28) 
+                # | iso3c %in% c("CHN", "USA", "CAN", "ROK", 
+                #                             "JPN", "IND", "RUS", "GBR")
+  ) %>% 
+  dplyr::select(iso3c,
+                country.name.en,
+                continent,
+                eu28) %>% 
+  dplyr::left_join(df_patents_pro, by = "iso3c") %>% 
+  dplyr::left_join(df_vci_pro, by = "iso3c") %>% 
+  dplyr::left_join(df_nbd_pro, by = "iso3c") 
+
+## Helper function to create the final years column cell
+include_fa <- function(x, y, rank) {
+  if (!is.na(y)) {
+    name <- ifelse(x > y,"arrow-circle-down", ifelse(x < y, "arrow-circle-up", "arrow-circle-right"))
+    color <- ifelse(is.na(x) || is.na(y), "transparent", ifelse(x > y, "#ff7f00",ifelse(x < y, "#00FF7F", "white")))
+    rank <- ifelse(is.na(rank), "",
+                   ifelse(rank <= 10, 
+                          kableExtra::cell_spec(paste0("#",rank),
+                                                background = "#6c5ce7",
+                                                color = "white",
+                                                font_size = 12),
+                          ""))
+    paste0(c(as.character(fontawesome::fa(name = name,
+                                          fill = color)), 
+             kableExtra::cell_spec(y,
+                                   font_size = 14,
+                                   color = color,
+                                   popover = kableExtra::spec_popover(content = y - x)),
+             rank),
+           collapse = "&nbsp;")
+  } else ""
+}
+
+## Calculating the european mean
+europe_mean <- all_data %>% 
+  tidyr::unnest(cols = c(patent_data, vci_data, new_business_data)) %>% 
+  dplyr::select_at(vars(dplyr::starts_with(c("px", "vx", "nx")))) %>% 
+  dplyr::summarise_all(~ round(mean(.x, na.rm = T), 0)) %>% 
+  dplyr::mutate(patents_2010 = px2010,
+                patents_2018 = px2018,
+                venture_capital_2010 = vx2010,
+                venture_capital_2018 = vx2018,
+                new_busi_2010 = nx2010,
+                new_busi_2018 = nx2018,
+                country.name.en = "Europe",
+                iso3c = "EUR"
+  ) %>% 
+  tidyr::nest(patent_data = dplyr::starts_with("px"),
+              vci_data = dplyr::starts_with("vx"),
+              new_business_data = dplyr::starts_with("nx"))
+
+
+
+## Ranking of the final year
+tbl_data <- all_data %>% 
+    tibble::add_row(europe_mean, .before = 1) %>% 
+  dplyr::arrange(-patents_2018) %>% 
+  dplyr::mutate(rank_pat = dplyr::row_number()) %>% 
+  dplyr::arrange(-venture_capital_2018) %>% 
+  dplyr::mutate(rank_vc = dplyr::row_number()) %>% 
+  dplyr::arrange(-new_busi_2018) %>% 
+  dplyr::mutate(rank_nbd = dplyr::row_number()) %>% 
+  dplyr::mutate(allover_rank = (rank_pat + rank_vc + rank_nbd) / 3) %>% 
+  dplyr::arrange(allover_rank) %>% 
+  dplyr::mutate(allover_rank = dplyr::row_number())
+
+## Rounding of first/ final year, creating sparklines and including flags
+tbl_data <- tbl_data %>% 
+  dplyr::mutate_at(vars("venture_capital_2010",
+                        "venture_capital_2018",
+                        "new_busi_2010",
+                        "new_busi_2018"),
+                   ~ round(.x, 1)) %>%
+  dplyr::mutate(patent_hist = purrr::map_chr(patent_data, 
+                                             ~ sparkline::spk_chr(as.numeric(.x[1,]),type = 'bar')),
+                vci_hist = purrr::map_chr(vci_data, 
+                                          ~ sparkline::spk_chr(as.numeric(.x[1,]),type = 'bar')),
+                nbd_hist = purrr::map_chr(new_business_data, 
+                                          ~ sparkline::spk_chr(as.numeric(.x[1,]),type = 'bar')),
+                Flag = paste0('<img src="https://cdn.countryflags.com/thumbs/',
+                              stringr::str_to_lower(
+                                stringr::str_replace_all(
+                                  dplyr::if_else(country.name.en == "Czechia",
+                                                 "czech-republic",
+                                                 country.name.en),
+                                  pattern = " ",
+                                  replacement = "-")),
+                              '/flag-800.png" height="20" width = "35"></img>'))
+
+## Creating the final year cells and round
+tbl_data <- tbl_data %>% 
+  dplyr::mutate(patents_2018 = purrr::pmap_chr(list(patents_2010, 
+                                                    patents_2018, 
+                                                    rank_pat),
+                                               include_fa),
+                venture_capital_2018 = purrr::pmap_chr(list(venture_capital_2010, 
+                                                            venture_capital_2018, 
+                                                            rank_vc),
+                                                       include_fa),
+                new_busi_2018 = purrr::pmap_chr(list(new_busi_2010, 
+                                                     new_busi_2018, 
+                                                     rank_nbd),
+                                                include_fa),
+                allover_rank = round(allover_rank, 0),
+                allover_rank = kableExtra::cell_spec(allover_rank,
+                                                     font_size = 20,
+                                                     background = "#eeeeee",
+                                                     color = "gray",
+                                                     extra_css = paste0("background: #e3e3e3;",
+                                                                        "border-radius: 50%;",
+                                                                        "-moz-border-radius: 50%;",
+                                                                        "-webkit-border-radius: 50%;",
+                                                                        "color: #6e6e6e;",
+                                                                        "display: inline-block;",
+                                                                        "font-weight: bold;",
+                                                                        "line-height: 40px;",
+                                                                        "margin-right: 5px;",
+                                                                        "text-align: center;",
+                                                                        "width: 40px;")),
+                allover_rank = ifelse(iso3c == "EUR", "", allover_rank)) %>% 
+  dplyr::mutate_at(vars("patents_2010",
+                        "venture_capital_2010",
+                        "new_busi_2010"),
+                   ~ kableExtra::cell_spec(tidyr::replace_na(., ""),
+                                           font_size = 14)) 
+
+```
+
+```{r, include = FALSE}
+sparkline::sparkline(0)
+```
+
+```{r, results = 'asis'}
+
+color.me <- which(tbl_data$iso3c == "EUR")
+
+tbl_data %>% 
+  dplyr::select(allover_rank,
+                country.name.en,
+                Flag,
+                patents_2010,
+                patent_hist,
+                patents_2018,
+                venture_capital_2010,
+                vci_hist,
+                venture_capital_2018,
+                new_busi_2010,
+                nbd_hist,
+                new_busi_2018) %>% 
+  knitr::kable(escape = FALSE,
+               format = "html",
+               align = c("c","l", "l",rep(c("r","c","l"), 3)),
+               # vline = c("","",rep(c("|","","|"), 3)),
+               col.names = c("",
+                             "Country",
+                             "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;",
+                             "2010",
+                             "",
+                             "2018",
+                             "2010",
+                             "",
+                             "2018",
+                             "2010",
+                             "",
+                             "2018")) %>%
+  kableExtra::add_header_above(c(" " = 3,
+                                 "Patents [n]" = 3,
+                                 "Venture Capital [kUSD]" = 3,
+                                 "New Business Development [n]" = 3))  %>%
+  kableExtra::kable_material_dark() %>%
+  kableExtra::row_spec(color.me, background = "#264A92") %>% 
+  kableExtra::column_spec(c(3,6,9),
+                          border_right = T,
+                          width = "10em") %>%
+  kableExtra::column_spec(2,
+                          width = "20em",
+                          color = "#eeeeee",
+                          bold = T) %>% 
+  kableExtra::column_spec(3,
+                          width = "10em") %>% 
+  kableExtra::column_spec(c(4,7,10),
+                          width = "15em",
+                          color = "#eeeeee") %>% 
+  kableExtra::column_spec(c(5,8,11),
+                          width = "15em") %>% 
+  kableExtra::footnote(number = c("Patent Data: https://wipo.int", 
+                                  "Venture Capital Data: https://stats.oecd.org",
+                                  "New Business Density Data: https://worldbank.org (new registrations per 1,000 people ages 15-64)",
+                                  "Country Flags: https://cdn.countryflags.com"))
+```
